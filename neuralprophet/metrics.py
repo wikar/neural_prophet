@@ -289,8 +289,8 @@ class MAE(BatchMetric):
         self.shift_scale = shift_scale
 
     def _update_batch_value(self, predicted, target, **kwargs):
-        predicted = predicted.numpy()
-        target = target.numpy()
+        predicted = predicted.cpu().numpy()
+        target = target.cpu().numpy()
         if self.shift_scale is not None:
             predicted = self.shift_scale[1] * predicted + self.shift_scale[0]
             target = self.shift_scale[1] * target + self.shift_scale[0]
@@ -330,8 +330,8 @@ class MSE(BatchMetric):
         self.shift_scale = shift_scale
 
     def _update_batch_value(self, predicted, target, **kwargs):
-        predicted = predicted.numpy()
-        target = target.numpy()
+        predicted = predicted.cpu().numpy()
+        target = target.cpu().numpy()
         if self.shift_scale is not None:
             predicted = self.shift_scale[1] * predicted + self.shift_scale[0]
             target = self.shift_scale[1] * target + self.shift_scale[0]
@@ -371,8 +371,8 @@ class RMSE(BatchMetric):
         self.shift_scale = shift_scale
 
     def _update_batch_value(self, predicted, target, **kwargs):
-        predicted = predicted.numpy()
-        target = target.numpy()
+        predicted = predicted.cpu().numpy()
+        target = target.cpu().numpy()
         if self.shift_scale is not None:
             predicted = self.shift_scale[1] * predicted + self.shift_scale[0]
             target = self.shift_scale[1] * target + self.shift_scale[0]

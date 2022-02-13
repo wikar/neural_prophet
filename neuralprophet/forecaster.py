@@ -19,6 +19,7 @@ from neuralprophet import metrics
 
 log = logging.getLogger("NP.forecaster")
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 METRICS = {
     "mae": metrics.MAE,
@@ -546,7 +547,7 @@ class NeuralProphet:
             # Run forward calculation
             predicted = self.model.forward(inputs)
             # Compute loss.
-            loss = self.config_train.loss_func(predicted, targets)
+            loss = self.config_train.loss_func(predicted.to(device), targets.to(device))
             # Regularize.
             loss, reg_loss = self._add_batch_regualarizations(loss, e, i / float(len(loader)))
             self.optimizer.zero_grad()
@@ -555,7 +556,7 @@ class NeuralProphet:
             self.scheduler.step()
             if self.metrics is not None:
                 self.metrics.update(
-                    predicted=predicted.detach(), target=targets.detach(), values={"Loss": loss, "RegLoss": reg_loss}
+                    predicted=predicted.to(device).detach(), target=targets.to(device).detach(), values={"Loss": loss, "RegLoss": reg_loss}
                 )
         if self.metrics is not None:
             return self.metrics.compute(save=True)
@@ -575,12 +576,12 @@ class NeuralProphet:
         """
         delay_weight = self.config_train.get_reg_delay_weight(e, iter_progress)
 
-        reg_loss = torch.zeros(1, dtype=torch.float, requires_grad=False)
+        reg_loss = torch.zeros(1, dtype=torch.float, requires_grad=False).to(device)
         if delay_weight > 0:
             # Add regularization of AR weights - sparsify
             if self.model.n_lags > 0 and self.config_ar.reg_lambda is not None:
                 reg_ar = self.config_ar.regularize(self.model.ar_weights)
-                reg_ar = torch.sum(reg_ar).squeeze() / self.n_forecasts
+                reg_ar = torch.sum(reg_ar).to(device).squeeze() / self.n_forecasts
                 reg_loss += self.config_ar.reg_lambda * reg_ar
 
             # Regularize trend to be smoother/sparse
@@ -626,7 +627,7 @@ class NeuralProphet:
             self.model.eval()
             for inputs, targets in loader:
                 predicted = self.model.forward(inputs)
-                val_metrics.update(predicted=predicted.detach(), target=targets.detach())
+                val_metrics.update(predicted=predicted.to(device).detach(), target=targets.to(device).detach())
             val_metrics = val_metrics.compute(save=True)
         return val_metrics
 
@@ -1212,15 +1213,15 @@ class NeuralProphet:
             self.model.eval()
             for inputs, _ in loader:
                 predicted = self.model.forward(inputs)
-                predicted_vectors.append(predicted.detach().numpy())
+                predicted_vectors.append(predicted.detach().cpu().numpy())
 
                 if include_components:
                     components = self.model.compute_components(inputs)
                     if component_vectors is None:
-                        component_vectors = {name: [value.detach().numpy()] for name, value in components.items()}
+                        component_vectors = {name: [value.detach().cpu().numpy()] for name, value in components.items()}
                     else:
                         for name, value in components.items():
-                            component_vectors[name].append(value.detach().numpy())
+                            component_vectors[name].append(value.detach().cpu().numpy())
 
         predicted = np.concatenate(predicted_vectors)
         scale_y, shift_y = self.data_params["y"].scale, self.data_params["y"].shift
@@ -1396,7 +1397,7 @@ class NeuralProphet:
         """
         df = self._check_dataframe(df, check_y=False, exogenous=False)
         df = df_utils.normalize(df, self.data_params, local_modeling=self.local_modeling)
-        t = torch.from_numpy(np.expand_dims(df["t"].values, 1))
+        t = torch.from_numpy(np.expand_dims(df["t"].values, 1)).to(device)
         trend = self.model.trend(t).squeeze().detach().numpy()
         trend = trend * self.data_params["y"].scale + self.data_params["y"].shift
         return pd.DataFrame({"ds": df["ds"], "trend": trend})
@@ -1444,7 +1445,7 @@ class NeuralProphet:
         for inputs, _ in loader:
             for name in self.season_config.periods:
                 features = inputs["seasonalities"][name]
-                y_season = torch.squeeze(self.model.seasonality(features=features, name=name))
+                y_season = torch.squeeze(self.model.seasonality(features=features, name=name)).to(device)
                 predicted[name].append(y_season.data.numpy())
 
         for name in self.season_config.periods:

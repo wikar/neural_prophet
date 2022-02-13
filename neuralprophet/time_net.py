@@ -11,6 +11,7 @@ from neuralprophet.utils import (
 
 log = logging.getLogger("NP.time_net")
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def new_param(dims):
     """Create and initialize a new torch Parameter.
@@ -22,9 +23,9 @@ def new_param(dims):
         initialized Parameter
     """
     if len(dims) > 1:
-        return nn.Parameter(nn.init.xavier_normal_(torch.randn(dims)), requires_grad=True)
+        return nn.Parameter(nn.init.xavier_normal_(torch.randn(dims).to(device)), requires_grad=True)
     else:
-        return nn.Parameter(torch.nn.init.xavier_normal_(torch.randn([1] + dims)).squeeze(0), requires_grad=True)
+        return nn.Parameter(torch.nn.init.xavier_normal_(torch.randn([1] + dims).to(device)).to(device).squeeze(0), requires_grad=True)
 
 
 class TimeNet(nn.Module):
@@ -92,7 +93,7 @@ class TimeNet(nn.Module):
                     self.config_trend.changepoints = np.insert(self.config_trend.changepoints, 0, 0.0)
                 self.trend_changepoints_t = torch.tensor(
                     self.config_trend.changepoints, requires_grad=False, dtype=torch.float
-                )
+                ).to(device)
                 self.trend_deltas = new_param(dims=[self.config_trend.n_changepoints + 1])  # including first segment
                 if self.config_trend.growth == "discontinuous":
                     self.trend_m = new_param(dims=[self.config_trend.n_changepoints + 1])  # including first segment
@@ -209,7 +210,7 @@ class TimeNet(nn.Module):
         if self.config_trend is None or self.config_trend.n_changepoints < 1:
             return None
         elif self.segmentwise_trend:
-            return self.trend_deltas - torch.cat((self.trend_k0, self.trend_deltas[:-1]))
+            return self.trend_deltas - torch.cat((self.trend_k0, self.trend_deltas[:-1])).to(device)
         else:
             return self.trend_deltas
 
@@ -280,29 +281,29 @@ class TimeNet(nn.Module):
         Returns:
             Trend component, same dimensions as input t
         """
-        past_next_changepoint = t.unsqueeze(2) >= torch.unsqueeze(self.trend_changepoints_t[1:], dim=0)
-        segment_id = torch.sum(past_next_changepoint, dim=2)
+        past_next_changepoint = t.unsqueeze(2).to(device) >= torch.unsqueeze(self.trend_changepoints_t[1:], dim=0).to(device)
+        segment_id = torch.sum(past_next_changepoint, dim=2).to(device)
         current_segment = nn.functional.one_hot(segment_id, num_classes=self.config_trend.n_changepoints + 1)
 
-        k_t = torch.sum(current_segment * torch.unsqueeze(self.trend_deltas, dim=0), dim=2)
+        k_t = torch.sum(current_segment * torch.unsqueeze(self.trend_deltas, dim=0).to(device), dim=2).to(device)
 
         if not self.segmentwise_trend:
-            previous_deltas_t = torch.sum(past_next_changepoint * torch.unsqueeze(self.trend_deltas[:-1], dim=0), dim=2)
+            previous_deltas_t = torch.sum(past_next_changepoint * torch.unsqueeze(self.trend_deltas[:-1], dim=0).to(device), dim=2).to(device)
             k_t = k_t + previous_deltas_t
 
         if self.config_trend.growth != "discontinuous":
             if self.segmentwise_trend:
-                deltas = self.trend_deltas[:] - torch.cat((self.trend_k0, self.trend_deltas[0:-1]))
+                deltas = self.trend_deltas[:] - torch.cat((self.trend_k0, self.trend_deltas[0:-1])).to(device)
             else:
                 deltas = self.trend_deltas
             gammas = -self.trend_changepoints_t[1:] * deltas[1:]
-            m_t = torch.sum(past_next_changepoint * gammas, dim=2)
+            m_t = torch.sum(past_next_changepoint * gammas, dim=2).to(device)
             if not self.segmentwise_trend:
                 m_t = m_t.detach()
         else:
-            m_t = torch.sum(current_segment * torch.unsqueeze(self.trend_m, dim=0), dim=2)
+            m_t = torch.sum(current_segment * torch.unsqueeze(self.trend_m, dim=0).to(device), dim=2).to(device)
 
-        return (self.trend_k0 + k_t) * t + m_t
+        return (self.trend_k0 + k_t) * t.to(device) + m_t
 
     def trend(self, t):
         """Computes trend based on model configuration.
@@ -316,7 +317,7 @@ class TimeNet(nn.Module):
 
         """
         if self.config_trend.growth == "off":
-            trend = torch.zeros_like(t)
+            trend = torch.zeros_like(t).to(device)
         elif int(self.config_trend.n_changepoints) == 0:
             trend = self.trend_k0 * t
         else:
@@ -334,7 +335,8 @@ class TimeNet(nn.Module):
         Returns:
             forecast component of dims (batch, n_forecasts)
         """
-        return torch.sum(features * torch.unsqueeze(self.season_params[name], dim=0), dim=2)
+
+        return torch.sum(features.to(device) * torch.unsqueeze(self.season_params[name], dim=0).to(device), dim=2).to(device)
 
     def all_seasonalities(self, s):
         """Compute all seasonality components.
@@ -346,7 +348,7 @@ class TimeNet(nn.Module):
         Returns:
             forecast component of dims (batch, n_forecasts)
         """
-        x = torch.zeros(s[list(s.keys())[0]].shape[:2])
+        x = torch.zeros(s[list(s.keys())[0]].shape[:2]).to(device)
         for name, features in s.items():
             x = x + self.seasonality(features, name)
         return x
@@ -366,7 +368,7 @@ class TimeNet(nn.Module):
             features = features[:, :, indices]
             params = params[indices]
 
-        return torch.sum(features * torch.unsqueeze(params, dim=0), dim=2)
+        return torch.sum(features.to(device) * torch.unsqueeze(params, dim=0).to(device), dim=2).to(device)
 
     def auto_regression(self, lags):
         """Computes auto-regessive model component AR-Net.
@@ -441,8 +443,8 @@ class TimeNet(nn.Module):
         Returns:
             forecast of dims (batch, n_forecasts)
         """
-        additive_components = torch.zeros_like(inputs["time"])
-        multiplicative_components = torch.zeros_like(inputs["time"])
+        additive_components = torch.zeros_like(inputs["time"]).to(device)
+        multiplicative_components = torch.zeros_like(inputs["time"]).to(device)
 
         if "lags" in inputs:
             additive_components += self.auto_regression(lags=inputs["lags"])
